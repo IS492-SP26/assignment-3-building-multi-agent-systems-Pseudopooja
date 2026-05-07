@@ -153,6 +153,8 @@ Both input and output are checked. Safety events are logged and displayed in the
 | **Composite** | **4.0** |
 
 ---
+<img width="486" height="275" alt="image" src="https://github.com/user-attachments/assets/232a5e1a-bfe0-4305-abd7-0356de0eb1c0" />
+Figure 3: LLM-as-a-Judge evaluation results displayed in the Streamlit UI, showing composite score of 4.0/5.0 across five criteria
 
 ## Repo Structure
 
