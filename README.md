@@ -3,8 +3,7 @@
 
 A multi-agent deep research system for HCI topics, built with **LangGraph**, **Qwen3-8B**, **Tavily**, and **Streamlit**.
 ---
-## Demo: 
-#### https://assignment-3-building-multi-agent-systems-pseudopooja-q3nfvzmv.streamlit.app
+### Demo: https://assignment-3-building-multi-agent-systems-pseudopooja-q3nfvzmv.streamlit.app
 
 <img width="480" height="271" alt="image" src="https://github.com/user-attachments/assets/ee82940c-09b9-4769-a3a6-48ef6ca729a6" />
 Figure 1: Agent execution trace showing Planner, Researcher, Critic, and Writer steps for a single query
