@@ -5,13 +5,6 @@ A multi-agent deep research system for HCI topics, built with **LangGraph**, **Q
 
 ---
 
-## Demo
-
-![Research Answer](docs/screenshots/research_answer.png)
-![Safety Block](docs/screenshots/safety_block.png)
-
----
-
 ## System Architecture
 
 ```
