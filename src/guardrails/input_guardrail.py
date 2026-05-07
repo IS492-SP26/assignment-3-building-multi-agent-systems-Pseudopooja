@@ -1,142 +1,110 @@
 """
-Input Guardrail
-Checks user inputs for safety violations.
+Input guardrail: detects unsafe or off-topic user queries before they reach agents.
+
+Policy categories enforced:
+  1. HARMFUL   - requests for harmful, violent, or illegal content
+  2. INJECTION - prompt injection / jailbreak attempts
+  3. OFF_TOPIC  - queries unrelated to HCI/AI/technology research
 """
 
-from typing import Dict, Any, List
+import re
+from typing import Tuple
+
+# --------------------------------------------------------------------------- #
+# Pattern banks
+# --------------------------------------------------------------------------- #
+
+_HARMFUL_PATTERNS = [
+    r"\b(bomb|explosive|weapon|poison|kill\s+(?:people|someone)|terrorist|suicide\s+method)\b",
+    r"\b(hack|crack|exploit|malware|ransomware|phishing)\b",
+    r"\b(child\s*(porn|abuse|exploit))\b",
+    r"\b(how\s+to\s+(make|build|create)\s+(drug|meth|fentanyl|cocaine))\b",
+]
+
+_INJECTION_PATTERNS = [
+    r"ignore\s+(all\s+)?(previous|prior|above)\s+instructions",
+    r"disregard\s+(your\s+)?(system\s+prompt|instructions|guidelines)",
+    r"you\s+are\s+now\s+(DAN|evil|uncensored|jailbreak)",
+    r"pretend\s+you\s+(have\s+no\s+restrictions|are\s+not\s+an\s+ai)",
+    r"act\s+as\s+(if\s+you\s+have\s+no|without\s+any)\s+(filter|restriction|guideline)",
+    r"<\s*system\s*>",          # XML injection attempt
+    r"\[INST\].*override",      # Llama-style injection
+    r"###\s*SYSTEM\s*:",        # Markdown injection
+]
+
+_ON_TOPIC_KEYWORDS = [
+    "hci", "human.computer", "user interface", "ux", "ui", "usability",
+    "ai", "artificial intelligence", "machine learning", "deep learning",
+    "explainable", "xai", "accessibility", "interaction", "design",
+    "research", "study", "paper", "survey", "review", "analysis",
+    "technology", "software", "system", "model", "agent", "chatbot",
+    "data", "algorithm", "evaluation", "user experience", "prototype",
+    "augmented reality", "virtual reality", "ar ", "vr ", "nlp",
+    "natural language", "visualization", "dashboard", "cognitive",
+    "information", "digital", "interface", "feedback", "perception",
+]
+
+# Minimum query length (chars)
+_MIN_LENGTH = 5
+_MAX_LENGTH = 2000
 
 
-class InputGuardrail:
+def check_input(query: str) -> Tuple[bool, str, str]:
     """
-    Guardrail for checking input safety.
+    Check a user query for safety violations.
 
-    TODO: YOUR CODE HERE
-    - Integrate with Guardrails AI or NeMo Guardrails
-    - Define validation rules
-    - Implement custom validators
-    - Handle different types of violations
+    Returns:
+        (is_safe: bool, category: str, reason: str)
+        category is one of: "SAFE", "HARMFUL", "INJECTION", "OFF_TOPIC", "INVALID"
     """
+    if not isinstance(query, str):
+        return False, "INVALID", "Query must be a string."
 
-    def __init__(self, config: Dict[str, Any]):
-        """
-        Initialize input guardrail.
+    q = query.strip()
 
-        Args:
-            config: Configuration dictionary
-        """
-        self.config = config
+    # Length checks
+    if len(q) < _MIN_LENGTH:
+        return False, "INVALID", "Query is too short. Please provide a meaningful question."
+    if len(q) > _MAX_LENGTH:
+        return False, "INVALID", f"Query exceeds maximum length of {_MAX_LENGTH} characters."
 
-        # TODO: Initialize guardrail framework
-        # Suggested implementation:
-        # - Read safety settings from config.yaml
-        # - Store min/max query length thresholds
-        # - Prepare policy categories such as harmful content,
-        #   prompt injection, and off-topic queries
-        # - Optionally initialize Guardrails AI / NeMo Guardrails here
+    q_lower = q.lower()
 
-    def validate(self, query: str) -> Dict[str, Any]:
-        """
-        Validate input query.
+    # 1. Harmful content check
+    for pattern in _HARMFUL_PATTERNS:
+        if re.search(pattern, q_lower):
+            return False, "HARMFUL", (
+                "Your query contains content that may relate to harmful or illegal activities. "
+                "This system is designed for HCI/AI research assistance only."
+            )
 
-        Args:
-            query: User input to validate
+    # 2. Prompt injection check
+    for pattern in _INJECTION_PATTERNS:
+        if re.search(pattern, q_lower):
+            return False, "INJECTION", (
+                "Your query appears to contain a prompt injection attempt. "
+                "Please submit a genuine research question."
+            )
 
-        Returns:
-            Validation result
+    # 3. Off-topic check — require at least one on-topic keyword
+    # (lenient: only block if query is clearly unrelated AND short)
+    has_topic = any(kw in q_lower for kw in _ON_TOPIC_KEYWORDS)
+    if not has_topic and len(q) < 80:
+        return False, "OFF_TOPIC", (
+            "This system specializes in HCI and AI research topics. "
+            "Please ask a question related to human-computer interaction, AI, UX, or related technology."
+        )
 
-        TODO: YOUR CODE HERE
-        - Implement validation logic
-        - Check for toxic language
-        - Check for prompt injection attempts
-        - Check query length and format
-        - Check for off-topic queries
-        """
-        violations = []
+    return True, "SAFE", "Query passed all input checks."
 
-        # TODO: Implement actual validation
-        # Suggested implementation:
-        # 1. Normalize the input (strip spaces, lowercase copy for keyword checks)
-        # 2. Add length checks using thresholds from config
-        # 3. Call helper methods like _check_toxic_language(),
-        #    _check_prompt_injection(), and _check_relevance()
-        # 4. Decide whether violations should block, sanitize, or warn
-        # 5. Return both the raw violations and a sanitized_input if applicable
 
-        # Placeholder checks
-        if len(query) < 5:
-            violations.append({
-                "validator": "length",
-                "reason": "Query too short",
-                "severity": "low"
-            })
-
-        if len(query) > 2000:
-            violations.append({
-                "validator": "length",
-                "reason": "Query too long",
-                "severity": "medium"
-            })
-
-        return {
-            "valid": len(violations) == 0,
-            "violations": violations,
-            "sanitized_input": query  # Could be modified version
-        }
-
-    def _check_toxic_language(self, text: str) -> List[Dict[str, Any]]:
-        """
-        Check for toxic/harmful language.
-
-        TODO: YOUR CODE HERE
-        Suggested implementation:
-        - Use a moderation API, Guardrails validator, or keyword/rule-based classifier
-        - Return a list of violations with validator name, reason, and severity
-        - Mark clearly unsafe requests as high severity
-        """
-        violations = []
-        # Implement toxicity check
-        return violations
-
-    def _check_prompt_injection(self, text: str) -> List[Dict[str, Any]]:
-        """
-        Check for prompt injection attempts.
-
-        TODO: YOUR CODE HERE
-        Suggested implementation:
-        - Detect phrases like \"ignore previous instructions\",
-        #   attempts to reveal system prompts, or role-confusion attacks
-        - Consider whether the result should block the request or sanitize it
-        """
-        violations = []
-        # Check for common prompt injection patterns
-        injection_patterns = [
-            "ignore previous instructions",
-            "disregard",
-            "forget everything",
-            "system:",
-            "sudo",
-        ]
-
-        for pattern in injection_patterns:
-            if pattern.lower() in text.lower():
-                violations.append({
-                    "validator": "prompt_injection",
-                    "reason": f"Potential prompt injection: {pattern}",
-                    "severity": "high"
-                })
-
-        return violations
-
-    def _check_relevance(self, query: str) -> List[Dict[str, Any]]:
-        """
-        Check if query is relevant to the system's purpose.
-
-        TODO: YOUR CODE HERE
-        Suggested implementation:
-        - Compare the query to the configured topic in config.yaml
-        - Use keyword heuristics or an LLM classifier
-        - Return low/medium severity violations for off-topic requests
-        """
-        violations = []
-        # Check if query is about HCI research (or configured topic)
-        return violations
+def sanitize_input(query: str) -> str:
+    """
+    Light sanitization: strip control characters and normalize whitespace.
+    Does NOT remove legitimate content.
+    """
+    # Remove null bytes and other control chars (except newline/tab)
+    cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", query)
+    # Normalize whitespace
+    cleaned = re.sub(r"[ \t]+", " ", cleaned).strip()
+    return cleaned

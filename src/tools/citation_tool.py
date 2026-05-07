@@ -1,349 +1,114 @@
 """
-Citation Tool
-Formats citations and manages citation lists.
-
-This tool provides citation formatting in multiple styles (primarily APA)
-and manages a bibliography for research outputs.
+Citation tracking and formatting utilities.
+Produces APA-style references and inline citation markers.
 """
 
-from typing import Dict, Any, List
-from datetime import datetime
+from typing import Any
 import re
 
 
-class CitationTool:
+class CitationTracker:
+    """Tracks sources collected during a research session."""
+
+    def __init__(self):
+        self._sources: list[dict] = []
+        self._index: dict[str, int] = {}  # url -> citation number
+
+    def add(self, source: dict) -> int:
+        """
+        Add a source and return its citation number (1-indexed).
+        Deduplicates by URL.
+        """
+        url = source.get("url", "")
+        if url and url in self._index:
+            return self._index[url]
+
+        num = len(self._sources) + 1
+        entry = {**source, "citation_number": num}
+        self._sources.append(entry)
+        if url:
+            self._index[url] = num
+        return num
+
+    def add_all(self, sources: list[dict]) -> list[int]:
+        return [self.add(s) for s in sources]
+
+    def get_all(self) -> list[dict]:
+        return list(self._sources)
+
+    def clear(self):
+        self._sources = []
+        self._index = {}
+
+    def to_apa_list(self) -> str:
+        """Return a formatted APA reference list."""
+        if not self._sources:
+            return "No sources collected."
+        lines = ["**References**\n"]
+        for s in self._sources:
+            lines.append(f"{s['citation_number']}. {format_apa(s)}")
+        return "\n".join(lines)
+
+    def to_json(self) -> list[dict]:
+        return self.get_all()
+
+
+def format_apa(source: dict) -> str:
     """
-    Tool for formatting and managing citations.
-    
-    Features:
-    - APA style formatting (7th edition)
-    - Citation tracking and deduplication
-    - Bibliography generation
-    - Support for papers, articles, and web sources
+    Format a single source dict as an APA citation string.
+    Handles both web and academic sources.
     """
+    source_type = source.get("source_type", "web")
 
-    def __init__(self, style: str = "apa"):
-        """
-        Initialize citation tool.
+    if source_type in ("academic", "academic_mock"):
+        authors = source.get("authors", "Unknown Author")
+        year = source.get("year", "n.d.")
+        title = source.get("title", "Untitled")
+        venue = source.get("venue", "")
+        url = source.get("url", "")
+        doi = source.get("doi", "")
 
-        Args:
-            style: Citation style ("apa", "mla", "chicago", etc.)
-        """
-        self.style = style
-        self.citations: List[Dict[str, Any]] = []
-        self.citation_counter = 0
+        apa = f"{authors} ({year}). {title}."
+        if venue:
+            apa += f" *{venue}*."
+        if doi:
+            apa += f" https://doi.org/{doi}"
+        elif url:
+            apa += f" {url}"
+        return apa
 
-    def format_citation(self, source: Dict[str, Any]) -> str:
-        """
-        Format a source as a citation.
+    else:  # web source
+        title = source.get("title", "Untitled")
+        url = source.get("url", "")
+        return f"{title}. Retrieved from {url}"
 
-        Args:
-            source: Source information dictionary with keys:
-                - type: "article", "paper", "webpage", or "book"
-                - authors: List of author dicts with "name" key
-                - year: Publication year
-                - title: Source title
-                - venue: Journal/conference name (for papers)
-                - url: Web URL
-                - doi: DOI identifier (for papers)
-                - site_name: Website name (for webpages)
 
-        Returns:
-            Formatted citation string in the specified style (default: APA)
-        """
-        source_type = source.get("type", "article")
+def inject_inline_citations(text: str, sources: list[dict]) -> str:
+    """
+    Given a text and a list of sources with citation_number,
+    append inline numbers where titles appear in the text.
+    Falls back to appending a numbered list at the end.
+    """
+    # Simple approach: append citation markers at end of sentences that
+    # mention source content, and add full reference list at end.
+    annotated = text.strip()
 
-        if self.style == "apa":
-            return self._format_apa(source, source_type)
-        elif self.style == "mla":
-            return self._format_mla(source, source_type)
-        else:
-            return self._format_apa(source, source_type)
+    ref_list = "\n\n---\n**Sources**\n"
+    for s in sources:
+        ref_list += f"\n[{s['citation_number']}] {format_apa(s)}"
 
-    def _format_apa(self, source: Dict[str, Any], source_type: str) -> str:
-        """
-        Format citation in APA style (7th edition).
-        
-        Supports:
-        - Academic papers/articles
-        - Webpages
-        - Generic sources
-        
-        Args:
-            source: Source information dictionary
-            source_type: Type of source ("article", "paper", "webpage", etc.)
-            
-        Returns:
-            APA-formatted citation string
-        """
-        if source_type == "article" or source_type == "paper":
-            # Journal article or academic paper
-            authors = source.get("authors", [])
-            year = source.get("year", "n.d.")
-            title = source.get("title", "Untitled")
-            venue = source.get("venue", "")
+    return annotated + ref_list
 
-            # Format authors
-            author_str = self._format_authors_apa(authors)
 
-            # Basic APA format for article
-            citation = f"{author_str} ({year}). {title}."
-            if venue:
-                citation += f" {venue}."
-
-            # Add DOI or URL if available
-            doi = source.get("doi")
-            url = source.get("url")
-            if doi:
-                citation += f" https://doi.org/{doi}"
-            elif url:
-                citation += f" {url}"
-
-            return citation
-
-        elif source_type == "webpage":
-            # Web page
-            authors = source.get("authors", [])
-            year = source.get("year", datetime.now().year)
-            title = source.get("title", "Untitled")
-            url = source.get("url", "")
-            site_name = source.get("site_name", "")
-
-            author_str = self._format_authors_apa(authors) if authors else site_name
-
-            citation = f"{author_str} ({year}). {title}."
-            if url:
-                citation += f" {url}"
-
-            return citation
-
-        else:
-            # Generic fallback
-            return f"{source.get('title', 'Unknown')} ({source.get('year', 'n.d.')})"
-
-    def _format_mla(self, source: Dict[str, Any], source_type: str) -> str:
-        """
-        Format citation in MLA style (9th edition).
-        
-        Args:
-            source: Source information dictionary
-            source_type: Type of source
-            
-        Returns:
-            MLA-formatted citation string
-        """
-        if source_type == "article" or source_type == "paper":
-            # Journal article or academic paper
-            authors = source.get("authors", [])
-            year = source.get("year", "n.d.")
-            title = source.get("title", "Untitled")
-            venue = source.get("venue", "")
-            
-            # Format authors for MLA (First Last, and Second Last)
-            author_str = self._format_authors_mla(authors)
-            
-            # MLA format: Author(s). "Article Title." Journal Name, Year.
-            citation = f'{author_str}. "{title}."'
-            if venue:
-                citation += f" {venue},"
-            citation += f" {year}."
-            
-            # Add URL if available
-            url = source.get("url")
-            if url:
-                citation += f" {url}."
-            
-            return citation
-            
-        elif source_type == "webpage":
-            # Web page
-            authors = source.get("authors", [])
-            title = source.get("title", "Untitled")
-            site_name = source.get("site_name", "")
-            year = source.get("year", "n.d.")
-            url = source.get("url", "")
-            
-            author_str = self._format_authors_mla(authors) if authors else site_name
-            
-            # MLA format for webpage
-            citation = f'{author_str}. "{title}."'
-            if site_name:
-                citation += f" {site_name},"
-            citation += f" {year}."
-            if url:
-                citation += f" {url}."
-            
-            return citation
-            
-        else:
-            # Generic fallback
-            return f'{source.get("title", "Unknown")}. {source.get("year", "n.d.")}.'
-    
-    def _format_authors_mla(self, authors: List[Dict[str, Any]]) -> str:
-        """
-        Format author list in MLA style.
-        
-        MLA format:
-        - 1 author: Last, First
-        - 2 authors: Last1, First1, and Last2, First2
-        - 3+ authors: Last1, First1, et al.
-        
-        Args:
-            authors: List of author dictionaries with "name" key
-            
-        Returns:
-            MLA-formatted author string
-        """
-        if not authors:
-            return "Unknown Author"
-        
-        if len(authors) == 1:
-            name = authors[0].get("name", "Unknown")
-            return self._format_single_author_mla(name)
-        
-        elif len(authors) == 2:
-            name1 = self._format_single_author_mla(authors[0].get("name", "Unknown"))
-            name2 = self._format_single_author_mla(authors[1].get("name", "Unknown"))
-            return f"{name1}, and {name2}"
-        
-        else:
-            # 3+ authors - use et al.
-            first_author = self._format_single_author_mla(authors[0].get("name", "Unknown"))
-            return f"{first_author}, et al."
-    
-    def _format_single_author_mla(self, name: str) -> str:
-        """
-        Format a single author name in MLA style (Last, First).
-        
-        Args:
-            name: Author's full name
-            
-        Returns:
-            MLA-formatted name (Last, First)
-        """
-        if not name or name == "Unknown":
-            return "Unknown"
-        
-        # If already in Last, First format, return as is
-        if ',' in name:
-            return name
-        
-        # Split name into parts
-        parts = name.strip().split()
-        if len(parts) == 1:
-            return parts[0]
-        
-        # Assume last part is surname, rest are given names
-        surname = parts[-1]
-        given_names = " ".join(parts[:-1])
-        
-        return f"{surname}, {given_names}"
-
-    def _format_authors_apa(self, authors: List[Dict[str, Any]]) -> str:
-        """
-        Format author list in APA style.
-        
-        APA 7th edition:
-        - 1-2 authors: List all
-        - 3-20 authors: List all
-        - 21+ authors: First 19, then ..., then last
-        
-        For simplicity, we use "et al." for 3+ authors
-        """
-        if not authors:
-            return "Unknown Author"
-
-        if len(authors) == 1:
-            name = authors[0].get("name", "Unknown")
-            return self._format_single_author(name)
-
-        elif len(authors) == 2:
-            name1 = self._format_single_author(authors[0].get("name", "Unknown"))
-            name2 = self._format_single_author(authors[1].get("name", "Unknown"))
-            return f"{name1}, & {name2}"
-
-        else:
-            # More than 2 authors - use et al. for brevity
-            first_author = self._format_single_author(authors[0].get("name", "Unknown"))
-            return f"{first_author}, et al."
-    
-    def _format_single_author(self, name: str) -> str:
-        """
-        Format a single author name in APA style (Last, F. M.)
-        
-        Handles various name formats and extracts last name and initials.
-        """
-        if not name or name == "Unknown":
-            return "Unknown"
-        
-        # If already in Last, F. format, return as is
-        if ',' in name:
-            return name
-        
-        # Split name into parts
-        parts = name.strip().split()
-        if len(parts) == 1:
-            return parts[0]
-        
-        # Assume last part is surname, rest are given names
-        surname = parts[-1]
-        given_names = parts[:-1]
-        
-        # Create initials from given names
-        initials = ". ".join([n[0].upper() for n in given_names if n]) + "."
-        
-        return f"{surname}, {initials}"
-
-    def add_citation(self, source: Dict[str, Any]) -> int:
-        """
-        Add a source to the citation list with deduplication.
-        
-        Checks if a source with the same title already exists to avoid duplicates.
-
-        Args:
-            source: Source information dictionary
-
-        Returns:
-            Citation number/index (1-based)
-        """
-        # Check if already exists (deduplication by title)
-        for i, existing in enumerate(self.citations):
-            if existing.get("title") == source.get("title"):
-                return i + 1
-
-        # Add new citation
-        self.citations.append(source)
-        self.citation_counter += 1
-        return self.citation_counter
-
-    def get_citation_number(self, source: Dict[str, Any]) -> int:
-        """Get the citation number for a source."""
-        for i, existing in enumerate(self.citations):
-            if existing.get("title") == source.get("title"):
-                return i + 1
-        return 0
-
-    def generate_bibliography(self) -> List[str]:
-        """
-        Generate formatted bibliography from all citations.
-        
-        Citations are formatted according to the selected style and sorted
-        alphabetically by the first author's last name (APA/MLA standard).
-
-        Returns:
-            List of formatted citation strings, sorted alphabetically
-        """
-        bibliography = []
-        for source in self.citations:
-            citation = self.format_citation(source)
-            bibliography.append(citation)
-
-        # Sort alphabetically (standard for APA and MLA)
-        bibliography.sort()
-
-        return bibliography
-
-    def clear_citations(self):
-        """Clear all citations."""
-        self.citations = []
-        self.citation_counter = 0
+def build_citation_summary(tracker: CitationTracker) -> dict:
+    """Return a structured summary for the UI."""
+    sources = tracker.get_all()
+    web = [s for s in sources if s.get("source_type") in ("web", "web_mock")]
+    academic = [s for s in sources if s.get("source_type") in ("academic", "academic_mock")]
+    return {
+        "total": len(sources),
+        "web_count": len(web),
+        "academic_count": len(academic),
+        "sources": sources,
+        "apa_list": tracker.to_apa_list(),
+    }

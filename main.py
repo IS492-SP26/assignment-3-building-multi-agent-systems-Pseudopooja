@@ -1,111 +1,173 @@
 """
-Main Entry Point
-Can be used to run the system or evaluation.
+main.py — entry points for the Multi-Agent HCI Research System.
 
 Usage:
-  python main.py --mode cli           # Run CLI interface
-  python main.py --mode web           # Run web interface
-  python main.py --mode evaluate      # Run evaluation
+  python main.py                    # AutoGen example (default demo)
+  python main.py --mode autogen     # Same as above
+  python main.py --mode cli         # Interactive CLI
+  python main.py --mode web         # Launch Streamlit UI
+  python main.py --mode evaluate    # Run batch evaluation
+  python main.py --mode demo        # Single end-to-end demo with judge output
 """
 
 import argparse
-import asyncio
+import os
 import sys
-from pathlib import Path
+import json
+import subprocess
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
-def run_cli():
-    """Run CLI interface."""
-    from src.ui.cli import main as cli_main
-    cli_main()
+def mode_autogen():
+    """Quick demo: run one query end-to-end and print results."""
+    from src.autogen_orchestrator import run_research
+    from src.guardrails.safety_manager import safety_manager
+    from src.evaluation.judge import run_both_judges, format_judge_results
 
-
-def run_web():
-    """Run web interface."""
-    import subprocess
-    print("Starting Streamlit web interface...")
-    subprocess.run(["streamlit", "run", "src/ui/streamlit_app.py"])
-
-
-async def run_evaluation():
-    """Run system evaluation."""
-    import yaml
-    from dotenv import load_dotenv
-    from src.autogen_orchestrator import AutoGenOrchestrator
-    
-    # Load environment variables
-    load_dotenv()
-
-    # Load config
-    with open("config.yaml", 'r') as f:
-        config = yaml.safe_load(f)
-
-    # Initialize AutoGen orchestrator
-    print("Initializing AutoGen orchestrator...")
-    orchestrator = AutoGenOrchestrator(config)
-    
-    # For now, run a simple test query
-    # TODO: Integrate with SystemEvaluator for full evaluation
-    # Suggested implementation:
-    # - Import SystemEvaluator from src/evaluation/evaluator.py
-    # - Load test queries from data/example_queries.json
-    # - Run batch evaluation and print/save the report summary
-    print("\n" + "=" * 70)
-    print("RUNNING TEST QUERY")
-    print("=" * 70)
-    
-    test_query = "What are the key principles of accessible user interface design?"
-    print(f"\nQuery: {test_query}\n")
-    
-    result = orchestrator.process_query(test_query)
-    
-    print("\n" + "=" * 70)
-    print("RESULTS")
-    print("=" * 70)
-    print(f"\nResponse:\n{result.get('response', 'No response generated')}")
-    print(f"\nMetadata:")
-    print(f"  - Messages: {result.get('metadata', {}).get('num_messages', 0)}")
-    print(f"  - Sources: {result.get('metadata', {}).get('num_sources', 0)}")
-    
-    print("\n" + "=" * 70)
-    print("Note: Full evaluation with SystemEvaluator can be implemented")
-    print("=" * 70)
-
-
-def run_autogen():
-    """Run AutoGen example."""
-    import subprocess
-    print("Running AutoGen example...")
-    subprocess.run([sys.executable, "example_autogen.py"])
-
-
-def main():
-    """Main entry point."""
-    parser = argparse.ArgumentParser(
-        description="Multi-Agent Research Assistant"
+    query = (
+        "What are the main challenges of designing explainable AI interfaces "
+        "for non-expert users, and what design patterns have been proposed?"
     )
+    print(f"\n{'='*60}")
+    print("Multi-Agent HCI Research System — Demo")
+    print(f"{'='*60}")
+    print(f"Query: {query}\n")
+
+    # Safety check
+    safety = safety_manager.validate_input(query)
+    print(f"[Safety] Input check: {safety['category']}")
+
+    # Research
+    print("\n[Pipeline] Running agents...\n")
+    result = run_research(query)
+
+    print("── Agent Trace ──────────────────────────────────────────")
+    for step in result.get("trace", []):
+        print(step)
+        print()
+
+    print("── Final Answer ─────────────────────────────────────────")
+    print(result.get("final_answer", "No answer generated."))
+
+    print(f"\n── Citations ({len(result.get('citations', []))}) ──────────────────────────────")
+    for c in result.get("citations", [])[:5]:
+        print(f"  [{c.get('citation_number')}] {c.get('title')} — {c.get('url', '')[:60]}")
+
+    # Output safety
+    out_safety = safety_manager.validate_output(result.get("final_answer", ""))
+    print(f"\n[Safety] Output check: {out_safety['category']}")
+
+    # Judge
+    print("\n── LLM-as-a-Judge ───────────────────────────────────────")
+    judge = run_both_judges(query, result.get("final_answer", ""))
+    print(format_judge_results(judge))
+
+    # Export
+    os.makedirs("outputs", exist_ok=True)
+    export_path = "outputs/demo_session.json"
+    with open(export_path, "w") as f:
+        json.dump({**result, "judge_results": judge}, f, indent=2)
+    print(f"\n📁 Session exported to {export_path}")
+
+
+def mode_cli():
+    """Interactive CLI research loop."""
+    from src.autogen_orchestrator import run_research
+    from src.guardrails.safety_manager import safety_manager
+    from src.evaluation.judge import run_both_judges, format_judge_results
+
+    print("\n🔬 HCI Research Agent — Interactive CLI")
+    print("Type 'quit' to exit, 'log' to see safety log, 'eval' to run batch evaluation.\n")
+
+    while True:
+        try:
+            query = input("🔍 Enter research question: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nGoodbye!")
+            break
+
+        if not query:
+            continue
+        if query.lower() in ("quit", "exit", "q"):
+            print("Goodbye!")
+            break
+        if query.lower() == "log":
+            import json
+            print(json.dumps(safety_manager.get_log(), indent=2))
+            continue
+        if query.lower() == "eval":
+            mode_evaluate()
+            continue
+
+        # Safety check
+        safety = safety_manager.validate_input(query)
+        if not safety["allowed"]:
+            print(f"\n🚫 Blocked [{safety['category']}]: {safety['reason']}\n")
+            continue
+
+        print("\n⏳ Running research pipeline...\n")
+        result = run_research(safety["sanitized_query"])
+
+        print("── Trace ────────────────────────────────────────────────")
+        for step in result.get("trace", []):
+            print(step)
+
+        print("\n── Answer ───────────────────────────────────────────────")
+        print(result.get("final_answer", "No answer."))
+
+        print(f"\n── Sources ({len(result.get('citations', []))}) ──")
+        for c in result.get("citations", [])[:5]:
+            print(f"  [{c.get('citation_number')}] {c.get('title', '')[:80]}")
+
+        # Judge
+        do_judge = input("\n⚖️  Run LLM judge? (y/N): ").strip().lower()
+        if do_judge == "y":
+            print("Running judges...")
+            judge = run_both_judges(query, result.get("final_answer", ""))
+            print(format_judge_results(judge))
+
+        print()
+
+
+def mode_web():
+    """Launch Streamlit web UI."""
+    script = os.path.join("src", "ui", "streamlit_app.py")
+    subprocess.run([sys.executable, "-m", "streamlit", "run", script], check=True)
+
+
+def mode_evaluate():
+    """Run batch evaluation on all queries in data/example_queries.json."""
+    from src.evaluation.evaluator import run_evaluation, load_eval_queries
+    queries = load_eval_queries()
+    print(f"\n📋 Loaded {len(queries)} evaluation queries.")
+    run_evaluation(queries)
+
+
+def mode_demo():
+    """Full end-to-end demo with rich output — same as autogen mode."""
+    mode_autogen()
+
+
+# =========================================================================== #
+# Entry point
+# =========================================================================== #
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Multi-Agent HCI Research System")
     parser.add_argument(
         "--mode",
-        choices=["cli", "web", "evaluate", "autogen"],
+        choices=["autogen", "cli", "web", "evaluate", "demo"],
         default="autogen",
-        help="Mode to run: cli, web, evaluate, or autogen (default)"
-    )
-    parser.add_argument(
-        "--config",
-        default="config.yaml",
-        help="Path to configuration file"
+        help="Run mode (default: autogen)",
     )
     args = parser.parse_args()
 
-    if args.mode == "cli":
-        run_cli()
-    elif args.mode == "web":
-        run_web()
-    elif args.mode == "evaluate":
-        asyncio.run(run_evaluation())
-    elif args.mode == "autogen":
-        run_autogen()
-
-
-if __name__ == "__main__":
-    main()
+    modes = {
+        "autogen": mode_autogen,
+        "cli": mode_cli,
+        "web": mode_web,
+        "evaluate": mode_evaluate,
+        "demo": mode_demo,
+    }
+    modes[args.mode]()

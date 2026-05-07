@@ -1,401 +1,296 @@
 """
-Streamlit Web Interface
-Web UI for the multi-agent research system.
+Streamlit web UI for the Multi-Agent HCI Research System.
 
-Run with: streamlit run src/ui/streamlit_app.py
+Run with:  streamlit run src/ui/streamlit_app.py
 """
 
 import sys
-from pathlib import Path
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-# Add project root to Python path
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
-
+import json
+import time
 import streamlit as st
-import asyncio
-import yaml
-from datetime import datetime
-from typing import Dict, Any
 from dotenv import load_dotenv
-
-from src.autogen_orchestrator import AutoGenOrchestrator
-
-# Load environment variables
 load_dotenv()
 
+from src.autogen_orchestrator import run_research
+from src.guardrails.safety_manager import safety_manager
+from src.evaluation.judge import run_both_judges, format_judge_results
 
-def load_config():
-    """Load configuration file."""
-    config_path = Path("config.yaml")
-    if config_path.exists():
-        with open(config_path, 'r') as f:
-            return yaml.safe_load(f)
-    return {}
+# =========================================================================== #
+# Page config
+# =========================================================================== #
+st.set_page_config(
+    page_title="HCI Research Agent",
+    page_icon="🔬",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
+# =========================================================================== #
+# Sidebar
+# =========================================================================== #
+with st.sidebar:
+    st.title("🔬 HCI Research Agent")
+    st.caption("Multi-Agent Deep Research System")
+    st.divider()
 
-def initialize_session_state():
-    """Initialize Streamlit session state."""
-    if 'history' not in st.session_state:
-        st.session_state.history = []
+    st.subheader("⚙️ Settings")
+    run_judge = st.toggle("Run LLM-as-a-Judge", value=True)
+    show_raw_json = st.toggle("Show raw JSON export", value=False)
 
-    if 'orchestrator' not in st.session_state:
-        config = load_config()
-        # Initialize AutoGen orchestrator
-        try:
-            st.session_state.orchestrator = AutoGenOrchestrator(config)
-        except Exception as e:
-            st.error(f"Failed to initialize orchestrator: {e}")
-            st.session_state.orchestrator = None
+    st.divider()
+    st.subheader("💡 Example Queries")
+    examples = [
+        "What are the main challenges of designing explainable AI for non-expert users?",
+        "How does AR improve usability in industrial training?",
+        "What evaluation methods work best for conversational AI UX?",
+        "How does cognitive load theory apply to dashboard design?",
+        "What are ethical considerations in AI-driven UI personalization?",
+    ]
+    for ex in examples:
+        if st.button(ex[:60] + "...", key=ex, use_container_width=True):
+            st.session_state["prefill_query"] = ex
 
-    if 'show_traces' not in st.session_state:
-        st.session_state.show_traces = False
-
-    if 'show_safety_log' not in st.session_state:
-        st.session_state.show_safety_log = False
-
-async def process_query(query: str) -> Dict[str, Any]:
-    """
-    Process a query through the orchestrator.
-    
-    Args:
-        query: Research query to process
-        
-    Returns:
-        Result dictionary with response, citations, and metadata
-    """
-    orchestrator = st.session_state.orchestrator
-    
-    if orchestrator is None:
-        return {
-            "query": query,
-            "error": "Orchestrator not initialized",
-            "response": "Error: System not properly initialized. Please check your configuration.",
-            "citations": [],
-            "metadata": {}
-        }
-    
-    try:
-        # Process query through AutoGen orchestrator
-        result = orchestrator.process_query(query)
-        
-        # Check for errors
-        if "error" in result:
-            return result
-        
-        # Extract citations from conversation history
-        citations = extract_citations(result)
-        
-        # Extract agent traces for display
-        agent_traces = extract_agent_traces(result)
-        
-        # Format metadata
-        metadata = result.get("metadata", {})
-        metadata["agent_traces"] = agent_traces
-        metadata["citations"] = citations
-        metadata["critique_score"] = calculate_quality_score(result)
-        
-        return {
-            "query": query,
-            "response": result.get("response", ""),
-            "citations": citations,
-            "metadata": metadata
-        }
-        
-    except Exception as e:
-        return {
-            "query": query,
-            "error": str(e),
-            "response": f"An error occurred: {str(e)}",
-            "citations": [],
-            "metadata": {"error": True}
-        }
-
-
-def extract_citations(result: Dict[str, Any]) -> list:
-    """Extract citations from research result."""
-    citations = []
-    
-    # Look through conversation history for citations
-    for msg in result.get("conversation_history", []):
-        content = msg.get("content", "")
-        
-        # Find URLs in content
-        import re
-        urls = re.findall(r'https?://[^\s<>"{}|\\^`\[\]]+', content)
-        
-        # Find citation patterns like [Source: Title]
-        citation_patterns = re.findall(r'\[Source: ([^\]]+)\]', content)
-        
-        for url in urls:
-            if url not in citations:
-                citations.append(url)
-        
-        for citation in citation_patterns:
-            if citation not in citations:
-                citations.append(citation)
-    
-    return citations[:10]  # Limit to top 10
-
-
-def extract_agent_traces(result: Dict[str, Any]) -> Dict[str, list]:
-    """Extract agent execution traces from conversation history."""
-    traces = {}
-    
-    for msg in result.get("conversation_history", []):
-        agent = msg.get("source", "Unknown")
-        content = msg.get("content", "")[:200]  # First 200 chars
-        
-        if agent not in traces:
-            traces[agent] = []
-        
-        traces[agent].append({
-            "action_type": "message",
-            "details": content
-        })
-    
-    return traces
-
-
-def calculate_quality_score(result: Dict[str, Any]) -> float:
-    """Calculate a quality score based on various factors."""
-    score = 5.0  # Base score
-    
-    metadata = result.get("metadata", {})
-    
-    # Add points for sources
-    num_sources = metadata.get("num_sources", 0)
-    score += min(num_sources * 0.5, 2.0)
-    
-    # Add points for critique
-    if metadata.get("critique"):
-        score += 1.0
-    
-    # Add points for conversation length (indicates thorough discussion)
-    num_messages = metadata.get("num_messages", 0)
-    score += min(num_messages * 0.1, 2.0)
-    
-    return min(score, 10.0)  # Cap at 10
-
-
-def display_response(result: Dict[str, Any]):
-    """
-    Display query response.
-
-    TODO: YOUR CODE HERE
-    - Format response nicely
-    - Show citations with links
-    - Display sources
-    - Show safety events if any
-    """
-    # Check for errors
-    if "error" in result:
-        st.error(f"Error: {result['error']}")
-        return
-
-    # Display response
-    st.markdown("### Response")
-    response = result.get("response", "")
-    st.markdown(response)
-
-    # Display citations
-    citations = result.get("citations", [])
-    if citations:
-        with st.expander("📚 Citations", expanded=False):
-            for i, citation in enumerate(citations, 1):
-                st.markdown(f"**[{i}]** {citation}")
-
-    # Display metadata
-    metadata = result.get("metadata", {})
+    st.divider()
+    st.subheader("🛡️ Safety Log")
+    log_summary = safety_manager.get_log_summary()
     col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Sources Used", metadata.get("num_sources", 0))
-    with col2:
-        score = metadata.get("critique_score", 0)
-        st.metric("Quality Score", f"{score:.2f}")
+    col1.metric("Blocked", log_summary["blocked_count"])
+    col2.metric("Sanitized", log_summary["sanitized_count"])
 
-    # Safety events
-    safety_events = metadata.get("safety_events", [])
-    if safety_events:
-        with st.expander("⚠️ Safety Events", expanded=True):
-            for event in safety_events:
-                event_type = event.get("type", "unknown")
-                action = event.get("action", "allow")
-                violations = event.get("violations", [])
-                st.warning(
-                    f"{event_type.upper()} ({action.upper()}): "
-                    f"{len(violations)} violation(s) detected"
-                )
-                for violation in violations:
-                    st.text(f"  • {violation.get('reason', 'Unknown')}")
-
-    # Agent traces
-    if st.session_state.show_traces:
-        agent_traces = metadata.get("agent_traces", {})
-        if agent_traces:
-            display_agent_traces(agent_traces)
+    if st.button("Clear safety log"):
+        safety_manager.clear_log()
+        st.rerun()
 
 
-def display_agent_traces(traces: Dict[str, Any]):
-    """
-    Display agent execution traces.
+# =========================================================================== #
+# Main area
+# =========================================================================== #
+st.title("🧠 Multi-Agent HCI Research System")
+st.caption("Powered by LangGraph · Planner → Researcher → Critic → Writer")
 
-    TODO: YOUR CODE HERE
-    - Format traces nicely
-    - Show agent workflow
-    - Display timing information
-    """
-    with st.expander("🔍 Agent Traces", expanded=False):
-        for agent_name, actions in traces.items():
-            st.markdown(f"**{agent_name.upper()}**")
-            for action in actions:
-                action_type = action.get("action_type", "unknown")
-                details = action.get("details", {})
-                st.text(f"  → {action_type}: {details}")
+# Query input
+prefill = st.session_state.pop("prefill_query", "")
+query = st.text_area(
+    "Enter your research question:",
+    value=prefill,
+    height=100,
+    placeholder="e.g. What are the main challenges of designing explainable AI interfaces for non-expert users?",
+)
+
+col_run, col_clear = st.columns([1, 4])
+run_btn = col_run.button("🚀 Research", type="primary", use_container_width=True)
+if col_clear.button("🗑️ Clear", use_container_width=True):
+    st.session_state.pop("last_result", None)
+    st.rerun()
+
+# =========================================================================== #
+# Run pipeline
+# =========================================================================== #
+if run_btn and query.strip():
+
+    # ── Safety check ──────────────────────────────────────────────────────
+    safety_result = safety_manager.validate_input(query)
+
+    if not safety_result["allowed"]:
+        st.error(f"🚫 **Query blocked by safety policy**")
+        st.warning(
+            f"**Policy category:** `{safety_result['category']}`\n\n"
+            f"**Reason:** {safety_result['reason']}"
+        )
+        st.info("Please revise your query to focus on HCI/AI research topics.")
+        st.stop()
+
+    if safety_result["category"] != "SAFE":
+        st.warning(f"⚠️ Query was sanitized (`{safety_result['category']}`). Proceeding with cleaned input.")
+
+    safe_query = safety_result["sanitized_query"]
+
+    # ── Agent pipeline ─────────────────────────────────────────────────────
+    with st.status("🤖 Agents working...", expanded=True) as status:
+        st.write("**[Planner]** Decomposing your query...")
+        t0 = time.time()
+        result = run_research(safe_query)
+        elapsed = round(time.time() - t0, 1)
+
+        if result.get("error"):
+            status.update(label="❌ Pipeline error", state="error")
+            st.error(f"Error: {result['error']}")
+            st.stop()
+
+        # Output safety check
+        out_safety = safety_manager.validate_output(
+            result.get("final_answer", ""), query_context=safe_query
+        )
+        if not out_safety["allowed"]:
+            status.update(label="🚫 Output blocked", state="error")
+            st.error("**Output blocked by safety policy.**")
+            st.warning(f"Category: `{out_safety['category']}`\n\n{out_safety['reason']}")
+            st.stop()
+
+        result["final_answer"] = out_safety["sanitized_text"]
+        if out_safety["category"] not in ("SAFE",):
+            st.warning(f"⚠️ Output sanitized: `{out_safety['category']}`")
+
+        status.update(label=f"✅ Research complete in {elapsed}s", state="complete")
+
+    st.session_state["last_result"] = result
+    st.session_state["run_judge"] = run_judge
 
 
-def display_sidebar():
-    """Display sidebar with settings and statistics."""
-    with st.sidebar:
-        st.title("⚙️ Settings")
+# =========================================================================== #
+# Display results
+# =========================================================================== #
+if "last_result" in st.session_state:
+    result = st.session_state["last_result"]
 
-        # Show traces toggle
-        st.session_state.show_traces = st.checkbox(
-            "Show Agent Traces",
-            value=st.session_state.show_traces
+    tab_answer, tab_trace, tab_citations, tab_judge = st.tabs([
+        "📝 Answer", "🔍 Agent Trace", "📚 Citations", "⚖️ Evaluation"
+    ])
+
+    # ── Answer tab ─────────────────────────────────────────────────────────
+    with tab_answer:
+        st.subheader("Research Answer")
+
+        if result.get("sub_questions"):
+            with st.expander("🗂️ Sub-questions generated by Planner"):
+                for i, q in enumerate(result["sub_questions"], 1):
+                    st.markdown(f"{i}. {q}")
+
+        st.markdown(result.get("final_answer", "_No answer generated._"))
+
+        # Download button
+        st.download_button(
+            "⬇️ Download answer (.md)",
+            data=result.get("final_answer", ""),
+            file_name="research_answer.md",
+            mime="text/markdown",
         )
 
-        # Show safety log toggle
-        st.session_state.show_safety_log = st.checkbox(
-            "Show Safety Log",
-            value=st.session_state.show_safety_log
-        )
+    # ── Trace tab ──────────────────────────────────────────────────────────
+    with tab_trace:
+        st.subheader("Agent Execution Trace")
+        trace = result.get("trace", [])
+        if trace:
+            for i, step in enumerate(trace):
+                agent_name = "Agent"
+                if "[Planner]" in step:
+                    agent_name = "🗺️ Planner"
+                elif "[Researcher]" in step:
+                    agent_name = "🔍 Researcher"
+                elif "[Critic]" in step:
+                    agent_name = "🧐 Critic"
+                elif "[Writer]" in step:
+                    agent_name = "✍️ Writer"
+                with st.expander(f"Step {i+1}: {agent_name}", expanded=(i == 0)):
+                    st.markdown(step)
+        else:
+            st.info("No trace available.")
 
-        st.divider()
+        if result.get("critique"):
+            st.subheader("Critic Notes")
+            st.info(result["critique"])
 
-        st.title("📊 Statistics")
+    # ── Citations tab ──────────────────────────────────────────────────────
+    with tab_citations:
+        st.subheader("Sources & Citations")
+        citations = result.get("citations", [])
+        if citations:
+            web = [c for c in citations if c.get("source_type") in ("web", "web_mock")]
+            acad = [c for c in citations if c.get("source_type") in ("academic", "academic_mock")]
 
-        # TODO: Get actual statistics
-        st.metric("Total Queries", len(st.session_state.history))
-        st.metric("Safety Events", 0)  # TODO: Get from safety manager
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Sources", len(citations))
+            col2.metric("Web", len(web))
+            col3.metric("Academic", len(acad))
 
-        st.divider()
+            if web:
+                st.subheader("🌐 Web Sources")
+                for c in web:
+                    with st.expander(f"[{c.get('citation_number', '?')}] {c.get('title', 'Untitled')}"):
+                        st.markdown(f"**URL:** {c.get('url', 'N/A')}")
+                        st.markdown(f"**Content:** {c.get('content', '')[:300]}...")
 
-        # Clear history button
-        if st.button("Clear History"):
-            st.session_state.history = []
-            st.rerun()
+            if acad:
+                st.subheader("📄 Academic Papers")
+                for c in acad:
+                    with st.expander(f"[P{c.get('citation_number', '?')}] {c.get('title', 'Untitled')} ({c.get('year', '')})"):
+                        st.markdown(f"**Authors:** {c.get('authors', 'N/A')}")
+                        st.markdown(f"**Venue:** {c.get('venue', 'N/A')}")
+                        st.markdown(f"**Citations:** {c.get('citations', 0)}")
+                        if c.get("abstract"):
+                            st.markdown(f"**Abstract:** {c['abstract'][:300]}...")
+                        st.markdown(f"**URL:** {c.get('url', 'N/A')}")
+        else:
+            st.info("No citations collected.")
 
-        # About section
-        st.divider()
-        st.markdown("### About")
-        config = load_config()
-        system_name = config.get("system", {}).get("name", "Research Assistant")
-        topic = config.get("system", {}).get("topic", "General")
-        st.markdown(f"**System:** {system_name}")
-        st.markdown(f"**Topic:** {topic}")
+    # ── Evaluation tab ─────────────────────────────────────────────────────
+    with tab_judge:
+        st.subheader("LLM-as-a-Judge Evaluation")
 
-
-def display_history():
-    """Display query history."""
-    if not st.session_state.history:
-        return
-
-    with st.expander("📜 Query History", expanded=False):
-        for i, item in enumerate(reversed(st.session_state.history), 1):
-            timestamp = item.get("timestamp", "")
-            query = item.get("query", "")
-            st.markdown(f"**{i}.** [{timestamp}] {query}")
-
-
-def main():
-    """Main Streamlit app."""
-    st.set_page_config(
-        page_title="Multi-Agent Research Assistant",
-        page_icon="🤖",
-        layout="wide"
-    )
-
-    initialize_session_state()
-
-    # Header
-    st.title("🤖 Multi-Agent Research Assistant")
-    st.markdown("Ask me anything about your research topic!")
-
-    # Sidebar
-    display_sidebar()
-
-    # Main area
-    col1, col2 = st.columns([2, 1])
-
-    with col1:
-        # Query input
-        query = st.text_area(
-            "Enter your research query:",
-            height=100,
-            placeholder="e.g., What are the latest developments in explainable AI for novice users?"
-        )
-
-        # Submit button
-        if st.button("🔍 Search", type="primary", use_container_width=True):
-            if query.strip():
-                with st.spinner("Processing your query..."):
-                    # Process query
-                    result = asyncio.run(process_query(query))
-
-                    # Add to history
-                    st.session_state.history.append({
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "query": query,
-                        "result": result
-                    })
-
-                    # Display result
-                    st.divider()
-                    display_response(result)
+        if st.session_state.get("run_judge"):
+            if "judge_results" not in st.session_state:
+                with st.spinner("Running judges..."):
+                    judge_results = run_both_judges(
+                        result["query"],
+                        result.get("final_answer", "")
+                    )
+                    st.session_state["judge_results"] = judge_results
             else:
-                st.warning("Please enter a query.")
+                judge_results = st.session_state["judge_results"]
 
-        # History
-        display_history()
+            # Display scores
+            sb = judge_results.get("scores_breakdown", {})
+            composite = judge_results.get("composite_score", 0)
 
-    with col2:
-        st.markdown("### 💡 Example Queries")
-        examples = [
-            "What are the key principles of user-centered design?",
-            "Explain recent advances in AR usability research",
-            "Compare different approaches to AI transparency",
-            "What are ethical considerations in AI for education?",
-        ]
+            st.metric("Composite Score", f"{composite:.1f} / 5.0")
 
-        for example in examples:
-            if st.button(example, use_container_width=True):
-                st.session_state.example_query = example
-                st.rerun()
+            cols = st.columns(5)
+            labels = ["Relevance", "Evidence", "Accuracy", "Clarity", "Safety"]
+            keys = ["relevance", "evidence", "accuracy", "clarity", "safety"]
+            for col, label, key in zip(cols, labels, keys):
+                col.metric(label, f"{sb.get(key, 0)}/5")
 
-        # If example was clicked, populate the text area
-        if 'example_query' in st.session_state:
-            st.info(f"Example query selected: {st.session_state.example_query}")
-            del st.session_state.example_query
+            st.markdown(format_judge_results(judge_results))
 
-        st.divider()
+            if show_raw_json:
+                st.json(judge_results)
+        else:
+            if st.button("▶️ Run judges now"):
+                with st.spinner("Evaluating..."):
+                    judge_results = run_both_judges(
+                        result["query"],
+                        result.get("final_answer", "")
+                    )
+                    st.session_state["judge_results"] = judge_results
+                    st.rerun()
 
-        st.markdown("### ℹ️ How It Works")
-        st.markdown("""
-        1. **Planner** breaks down your query
-        2. **Researcher** gathers evidence
-        3. **Writer** synthesizes findings
-        4. **Critic** verifies quality
-        5. **Safety** checks ensure appropriate content
-        """)
+    # ── Raw JSON export ────────────────────────────────────────────────────
+    if show_raw_json:
+        with st.expander("📦 Raw session JSON"):
+            export = {k: v for k, v in result.items() if k != "final_answer"}
+            export["final_answer_preview"] = result.get("final_answer", "")[:500]
+            st.json(export)
+            st.download_button(
+                "⬇️ Download full session (.json)",
+                data=json.dumps(result, indent=2),
+                file_name="session_export.json",
+                mime="application/json",
+            )
 
-    # Safety log (if enabled)
-    if st.session_state.show_safety_log:
-        st.divider()
-        st.markdown("### 🛡️ Safety Event Log")
-        # TODO: Display safety events from safety manager
-        st.info("No safety events recorded.")
+elif not run_btn:
+    st.info("👆 Enter a research question above and click **Research** to get started.")
 
-
-if __name__ == "__main__":
-    main()
+    st.subheader("🏗️ System Architecture")
+    st.markdown("""
+    | Agent | Role |
+    |-------|------|
+    | 🗺️ **Planner** | Decomposes query into 3–4 focused sub-questions |
+    | 🔍 **Researcher** | Searches web (Tavily) + academic papers (Semantic Scholar) |
+    | 🧐 **Critic** | Scores evidence quality; requests re-search if needed |
+    | ✍️ **Writer** | Synthesizes cited, structured answer |
+    
+    **Safety:** Input/output guardrails check for harmful content, prompt injection, and PII.
+    """)

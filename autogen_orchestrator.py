@@ -61,27 +61,39 @@ class ResearchState(TypedDict):
 # LLM client builder
 # =========================================================================== #
 
-def _build_llm(temperature: float = 0.3):
-    return None
+def _strip_think(text: str) -> str:
+    import re
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
+    return text.strip()
 
 
 def _call_llm(llm, system: str, user: str) -> str:
-    from openai import OpenAI as _OAI
-    c = _OAI(api_key=os.getenv("OPENAI_API_KEY",""), base_url=os.getenv("OPENAI_BASE_URL","https://api.openai.com/v1"))
+    """Call LLM via OpenAI client directly with thinking disabled."""
+    from openai import OpenAI
+    client = OpenAI(
+        api_key=os.getenv("OPENAI_API_KEY", ""),
+        base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+    )
     try:
-        r = c.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL","Qwen/Qwen3-8B"),
-            messages=[{"role":"system","content":system},{"role":"user","content":user}],
-            max_tokens=1500, temperature=0.3,
-            extra_body={"chat_template_kwargs":{"enable_thinking":False}},
+        resp = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "Qwen/Qwen3-8B"),
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            max_tokens=1500,
+            temperature=0.3,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
-        raw = r.choices[0].message.content or ""
-        import re as _re2
-        raw = _re2.sub(r"<think>.*?</think>","",raw,flags=_re2.DOTALL)
-        raw = _re2.sub(r"<think>.*","",raw,flags=_re2.DOTALL)
-        return raw.strip()
+        raw = resp.choices[0].message.content or ""
+        return _strip_think(raw)
     except Exception as e:
         return f"[LLM ERROR: {e}]"
+
+
+def _build_llm(temperature: float = 0.3):
+    return None  # calls go through _call_llm directly
 
 
 # =========================================================================== #
@@ -89,28 +101,41 @@ def _call_llm(llm, system: str, user: str) -> str:
 # =========================================================================== #
 
 def planner_node(state: ResearchState) -> dict:
-    """Decompose the user query into 3-4 focused sub-questions."""
+    """Decompose the user query into 4 focused sub-questions."""
     llm = _build_llm(temperature=0.2)
     system = (
-        "You are a research planning assistant specializing in HCI and AI. "
-        "Your job is to decompose a broad research question into 3-4 specific, "
-        "focused sub-questions that together fully cover the topic. "
-        "Return ONLY a JSON array of strings, e.g. [\"sub-q 1\", \"sub-q 2\", ...]"
+        "/no_think\n"
+        "You are a research planning assistant for HCI and AI. "
+        "Output ONLY a numbered list of exactly 4 sub-questions. Example format:\n"
+        "1. First sub-question here\n"
+        "2. Second sub-question here\n"
+        "3. Third sub-question here\n"
+        "4. Fourth sub-question here\n"
+        "No preamble, no explanation, nothing else."
     )
-    user = f"Decompose this research question into 3-4 sub-questions:\n\n{state['query']}"
+    user = "/no_think\nDecompose into 4 numbered sub-questions:\n" + state["query"]
     raw = _call_llm(llm, system, user)
 
-    # Parse JSON
-    try:
-        # Strip markdown code fences if present
-        clean = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-        sub_questions = json.loads(clean)
-        if not isinstance(sub_questions, list):
-            sub_questions = [state["query"]]
-    except Exception:
-        # Fallback: treat each line as a sub-question
-        lines = [l.strip(" -•123456789.") for l in raw.splitlines() if l.strip()]
-        sub_questions = lines[:4] if lines else [state["query"]]
+    # Parse numbered lines robustly — skip any think tag leakage
+    import re as _re
+    sub_questions = []
+    for line in raw.splitlines():
+        line = line.strip()
+        m = _re.match(r"^\d+[\.\'\)]\s*(.+)", line)
+        if m:
+            q = m.group(1).strip()
+            if not q.startswith("<") and len(q) > 10:
+                sub_questions.append(q)
+
+    # Guaranteed fallback
+    if len(sub_questions) < 2:
+        orig = state["query"]
+        sub_questions = [
+            f"What are the main user-facing challenges of: {orig}",
+            f"What technical barriers exist for: {orig}",
+            f"What design patterns or frameworks address: {orig}",
+            f"What empirical research evaluates approaches to: {orig}",
+        ]
 
     trace_msg = (
         f"**[Planner]** Decomposed query into {len(sub_questions)} sub-questions:\n"
@@ -178,14 +203,14 @@ def critic_node(state: ResearchState) -> dict:
     """Evaluate evidence quality and decide if more research is needed."""
     llm = _build_llm(temperature=0.1)
     system = (
-        "You are a critical research evaluator. "
+        "/no_think\nYou are a critical research evaluator. "
         "Review the evidence collected and assess whether it adequately answers the query. "
         "Return a JSON object with keys: "
         "\"quality_score\" (1-5), \"gaps\" (list of missing aspects), "
         "\"needs_more_research\" (boolean), \"summary\" (one sentence)."
     )
     user = (
-        f"Original query: {state['query']}\n\n"
+        f"/no_think\nOriginal query: {state['query']}\n\n"
         f"Evidence collected:\n{state['evidence_text'][:3000]}\n\n"
         "Evaluate the evidence quality."
     )
@@ -231,14 +256,14 @@ def writer_node(state: ResearchState) -> dict:
         tracker.add(p)
 
     system = (
-        "You are a research writer specializing in HCI and AI. "
+        "/no_think\nYou are a research writer specializing in HCI and AI. "
         "Write a comprehensive, well-structured answer to the research query. "
         "Use the evidence provided. Where you cite a source, note it as [Web N] or [Paper N] "
         "referencing the numbered sources in the evidence. "
         "Organize with clear headings. Aim for 400-700 words."
     )
     user = (
-        f"Research query: {state['query']}\n\n"
+        f"/no_think\nResearch query: {state['query']}\n\n"
         f"Critic notes: {state['critique']}\n\n"
         f"Evidence:\n{state['evidence_text'][:4000]}\n\n"
         "Write a comprehensive research synthesis."
