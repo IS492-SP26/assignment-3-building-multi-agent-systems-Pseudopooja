@@ -3,8 +3,7 @@
 
 A multi-agent deep research system for HCI topics, built with **LangGraph**, **Qwen3-8B**, **Tavily**, and **Streamlit**.
 ---
-## Demo: 
-#### https://assignment-3-building-multi-agent-systems-pseudopooja-q3nfvzmv.streamlit.app
+## Demo: #### https://assignment-3-building-multi-agent-systems-pseudopooja-q3nfvzmv.streamlit.app
 ---
 
 ## System Architecture
