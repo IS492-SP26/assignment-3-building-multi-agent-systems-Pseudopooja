@@ -71,10 +71,10 @@ cp .env.example .env
 
 Edit `.env` — the LLM keys are pre-configured. Add your Tavily key:
 ```env
-OPENAI_API_KEY=sk-SzGKL7KOo8fs3vkuFx5mHRdwZktp_0veWDek9YTIpGY
+OPENAI_API_KEY="Add your key"
 OPENAI_BASE_URL=https://vllm.salt-lab.org/v1
 OPENAI_MODEL=Qwen/Qwen3-8B
-TAVILY_API_KEY=your_key_here     # free at app.tavily.com
+TAVILY_API_KEY="Add your key"
 ```
 
 ---
